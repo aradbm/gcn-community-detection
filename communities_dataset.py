@@ -1,31 +1,27 @@
 '''
-CustomDataset of type torch.utils.data.Dataset. It is used to create a dataset of graphs.
-Contains a list of graphs. Each graph is a torch_geometric.data.Data object.
+CommunityDataset of type torch.utils.data.Dataset, is a class that generates a dataset of graphs
+with community structure.
 
-num_nodes: number of nodes in each graph
-num_classes: number of classes in each graph
-q: probability of connecting two nodes from different classes
-p: probability of connecting two nodes from the same class
-num_graphs: number of graphs in the dataset
+num_nodes           : number of nodes in each graph
+num_classes         : number of classes in each graph
+q                   : probability of connecting two nodes from different classes
+p                   : probability of connecting two nodes from the same class
+base_graphs         : number of graphs in the dataset, each graph is generated using the parameters above
+include_permutations: if True, each graph will be added to the dataset with all labels permutations
+
+Each graph is a torch_geometric.data.Data object, which contains:
+- edge_index: edge index tensor of shape [2, num_edges] (each column represents an edge)
+- x         : torch.eye of shape [num_nodes, num_nodes] (one-hot encoding of the nodes)
+- y         : node class labels of shape [num_nodes] (each node has a class label)
+
 Example of usage:
 dataset = CustomDataset(num_nodes, num_classes, q, p, num_graphs)
 dataset[0] # access the first graph in the dataset
 
-each graph is a Data object, which contains:
-edge_index: edge index tensor of shape [2, num_edges]
-x: torch.eye of shape [num_nodes, num_nodes] (one-hot encoding of the nodes)
-y: node class labels of shape [num_nodes], each node has a class label
-
+Functions:
 create_dataset(num_nodes, num_classes, q, p, num_graphs, file_name) - creates a dataset of graphs
 load_dataset(file_name) - loads the dataset
 plot_graph(graph_data) - plots a graph from the dataset
-
-TODO: If a graph true label is [0,1,1] for example and we predict [1,0,0], than the model successfully predicted 
-        the community of the graph, but the accuracy is 0 - need to fix.
-        Solution:   When running the dataset in the training, for each graph we want all permutations of the true labels.
-        For example, if the true labels are [0,1,2,2], than we want to the following permutations:
-        [1,2,0,0], [2,1,0,0], [0,2,1,1], [2,0,1,1], [1,0,2,2], [0,1,2,2] - instead of just [0,1,2,2].
-        So the model will learn that even if the labels are permuted, the graph is the same.
 '''
 from itertools import permutations
 import torch
@@ -52,11 +48,9 @@ class CommunitiesDataset(torch.utils.data.Dataset):
                           (self.num_nodes, ), dtype=torch.long)
 
         # Step 2: Create edges between the nodes according to the rules, node can't be connected to itself
-        edge_index = []
-
         # For each node, connect it to other nodes using probability p if they are in the same class,
-        # and probability q if they are in different classes.
-        # We create undirected graph, so we add the edge (i,j) and (j,i). No self loops.
+        # and probability q if they are in different classes. Undirected graph so we add both directions.
+        edge_index = []
         for i in range(self.num_nodes):
             for j in range(i + 1, self.num_nodes):
                 if y[i] == y[j] and np.random.rand() < self.p:
@@ -72,7 +66,7 @@ class CommunitiesDataset(torch.utils.data.Dataset):
         # Step 3: Create the data object
         data = Data(edge_index=edge_index, num_nodes=self.num_nodes, y=y)
 
-        # Step 4.2: Cluster the graph using the classes we assigned to the nodes
+        # Step 4: Cluster the graph using the classes we assigned to the nodes
         data.y = y
         data.x = torch.eye(self.num_nodes)
 
@@ -82,6 +76,12 @@ class CommunitiesDataset(torch.utils.data.Dataset):
         for _ in range(self.base_graphs):
             graph = self.generate_graph()
             if self.include_permutations:
+                '''
+                    When running the dataset in the training with permutations included, for each graph we will
+                    create a new graph with the same structure but with permuted labels.                    
+                    For example, if the true labels are [0,1,2,2], than we have to the following permutations:
+                    [1,2,0,0], [2,1,0,0], [0,2,1,1], [2,0,1,1], [1,0,2,2], [0,1,2,2] - instead of just [0,1,2,2].
+                '''
                 unique_labels = graph.y.unique().tolist()
                 for perm in set(permutations(unique_labels)):
                     permuted_labels = graph.y.clone()
@@ -111,7 +111,6 @@ def create_dataset(num_nodes, num_classes, q, p, num_graphs, file_name, include_
 
 
 def load_dataset(file_name):
-    # Load the dataset
     dataset = torch.load(file_name)
     return dataset
 
