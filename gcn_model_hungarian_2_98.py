@@ -1,5 +1,5 @@
 '''
-Simple model for community detection using the hungarian algorithm for accuracy calculation.
+GCN model for community detection using the hungarian algorithm for accuracy calculation.
 '''
 import torch
 import matplotlib.pyplot as plt
@@ -115,7 +115,6 @@ class GCNCommunityDetection:
         print(f"Number of graphs: {self.num_graphs}")
         print(f"Learning rate: {self.learning_rate}")
         print(f"Epochs: {self.epochs}")
-        # print number of parameters
         print(
             f"Number of parameters: {sum(p.numel() for p in self.model.parameters())}")
         print(f"Accuracy on the test_set: {test_accuracy:.4f}")
@@ -136,6 +135,7 @@ class GCNCommunityDetection:
 
 
 if __name__ == '__main__':
+    # Train the model, plot the results and save the model
     num_nodes = 100
     num_classes = 2
     gcn_cd = GCNCommunityDetection(
