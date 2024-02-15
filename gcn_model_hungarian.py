@@ -1,5 +1,5 @@
 '''
-Simple model for community detection using the hungarian algorithm for accuracy calculation.
+GCN model for community detection using the hungarian algorithm for accuracy calculation.
 '''
 import torch
 import matplotlib.pyplot as plt
@@ -9,7 +9,7 @@ from communities_dataset import create_dataset, load_dataset
 
 
 class GCNCommunityDetection:
-    def __init__(self, num_nodes, num_classes, q, p, num_graphs, learning_rate=0.001, epochs=100, is_data_augmentation=False, create_new_data=True):
+    def __init__(self, num_nodes, num_classes, q, p, num_graphs, learning_rate=0.001, epochs=100, add_permutations=False, create_new_data=True):
         self.num_nodes = num_nodes
         self.num_classes = num_classes
         self.q = q
@@ -17,7 +17,7 @@ class GCNCommunityDetection:
         self.num_graphs = num_graphs
         self.learning_rate = learning_rate
         self.epochs = epochs
-        self.is_data_augmentation = is_data_augmentation
+        self.add_permutations = add_permutations
         self.create_new_data = create_new_data
 
         self.model = None
@@ -37,7 +37,7 @@ class GCNCommunityDetection:
         num_test_graphs = self.num_graphs - num_train_graphs - num_val_graphs
         if self.create_new_data:
             create_dataset(
-                self.num_nodes, self.num_classes, self.q, self.p, num_train_graphs, "pt_train.pt", self.is_data_augmentation)
+                self.num_nodes, self.num_classes, self.q, self.p, num_train_graphs, "pt_train.pt", self.add_permutations)
             create_dataset(
                 self.num_nodes, self.num_classes, self.q, self.p, num_val_graphs, "pt_val.pt")
             create_dataset(
@@ -56,12 +56,27 @@ class GCNCommunityDetection:
         for data in train_dataset:
             # Forward pass
             pred = self.model(data)
-            loss = self.loss_func(pred, data.y)
-            # Backward pass
+            # Get the predicted labels and true labels
+            pred_labels = pred.max(dim=1)[1]
+            true_labels = data.y
+            # Compute the confusion matrix
+            n_classes = pred.size(1)
+            confusion_matrix = torch.zeros(
+                n_classes, n_classes, dtype=torch.int64)
+            for t, p in zip(true_labels.cpu().numpy(), pred_labels.cpu().numpy()):
+                confusion_matrix[t, p] += 1
+            # Apply the Hungarian algorithm to find the best permutation
+            row_ind, col_ind = linear_sum_assignment(-confusion_matrix.numpy())
+            # Permute the predictions according to the Hungarian algorithm
+            permuted_pred = pred[:, col_ind]
+            # Compute the loss with permuted predictions
+            loss = self.loss_func(permuted_pred, true_labels)
+            # Backward pass and optimize
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
             total_loss += loss.item()
+
         return total_loss / len(train_dataset)
 
     def test(self, test_dataset):
@@ -115,7 +130,6 @@ class GCNCommunityDetection:
         print(f"Number of graphs: {self.num_graphs}")
         print(f"Learning rate: {self.learning_rate}")
         print(f"Epochs: {self.epochs}")
-        # print number of parameters
         print(
             f"Number of parameters: {sum(p.numel() for p in self.model.parameters())}")
         print(f"Accuracy on the test_set: {test_accuracy:.4f}")
@@ -136,22 +150,47 @@ class GCNCommunityDetection:
 
 
 if __name__ == '__main__':
-    num_nodes = 100
-    num_classes = 2
+    # Train the model, plot the results and save the model
+    num_nodes = 50
+    num_classes = 4
     gcn_cd = GCNCommunityDetection(
-        num_nodes=num_nodes, num_classes=num_classes, q=0.2, p=0.8, num_graphs=1000, epochs=50,
-        is_data_augmentation=False, learning_rate=0.0001, create_new_data=True)
+        num_nodes=num_nodes, num_classes=num_classes, q=0.1, p=0.9, num_graphs=500, epochs=15,
+        add_permutations=True, learning_rate=0.001, create_new_data=False)
     gcn_cd.run()
     gcn_cd.plot_results()
     gcn_cd.save_model()
 
-    # Load the model, create 3 graphs and predict the communities
+    # Load the model, create graphs and predict the communities
     model = GCNNet(num_nodes, num_classes)
     model.load_state_dict(torch.load("pt_gcn_model.pt"))
     model.eval()
-    for _ in range(3):
+
+    # 5 times for each q, p
+    for _ in range(5):
         data = create_dataset(num_nodes, num_classes,
                               0.1, 0.9, 1, "pt_new_graph.pt")
+        data = load_dataset("pt_new_graph.pt")
+        out = model(data[0])
+        pred_labels = out.max(dim=1)[1]
+        print("True labels: ", data[0].y)
+        print("Predicted labels: ", pred_labels)
+        # Compute accuracy using the Hungarian algorithm
+        n_classes = out.size(1)
+        confusion_matrix = torch.zeros(n_classes, n_classes, dtype=torch.int64)
+        for t, p in zip(data[0].y.cpu().numpy(), pred_labels.cpu().numpy()):
+            confusion_matrix[t, p] += 1
+        row_ind, col_ind = linear_sum_assignment(
+            confusion_matrix.cpu().numpy(), maximize=True)
+        matched_predictions = confusion_matrix[row_ind, col_ind].sum()
+        total_nodes = data[0].y.size(0)
+        accuracy = matched_predictions / total_nodes
+        print("Accuracy: ", accuracy.item())
+    print("\n\n\n")
+
+    # 5 times for each different q, p
+    for _ in range(5):
+        data = create_dataset(num_nodes, num_classes,
+                              0.05, 0.6, 1, "pt_new_graph.pt")
         data = load_dataset("pt_new_graph.pt")
         out = model(data[0])
         pred_labels = out.max(dim=1)[1]
