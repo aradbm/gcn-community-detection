@@ -9,29 +9,32 @@ from communities_dataset import create_dataset, load_dataset
 
 
 class GCNCommunityDetection:
-    def __init__(self, num_nodes, num_classes, q, p, num_graphs, learning_rate=0.001, epochs=100, add_permutations=False, create_new_data=True):
+    def __init__(self, num_nodes, num_classes, q, p, num_graphs, learning_rate=0.001,
+                 epochs=100, add_permutations=False, create_new_data=True, dropout=0.5):
+        # dataset parameters
         self.num_nodes = num_nodes
         self.num_classes = num_classes
         self.q = q
         self.p = p
         self.num_graphs = num_graphs
-        self.learning_rate = learning_rate
-        self.epochs = epochs
         self.add_permutations = add_permutations
+
+        # training parameters
+        self.epochs = epochs
+        self.learning_rate = learning_rate
         self.create_new_data = create_new_data
 
+        # model, optimizer and loss function
+        self.dropout = dropout
         self.model = None
         self.optimizer = None
         self.loss_func = torch.nn.CrossEntropyLoss()
 
+        # results lists
         self.loss_list = []
         self.accuracy_list = []
 
     def prepare_data(self):
-        # create train_dataset, val_dataset, test_dataset, only train with augmented data
-        train_dataset = []
-        val_dataset = []
-        test_dataset = []
         num_train_graphs = int(0.8 * self.num_graphs)
         num_val_graphs = int(0.1 * self.num_graphs)
         num_test_graphs = self.num_graphs - num_train_graphs - num_val_graphs
@@ -106,7 +109,7 @@ class GCNCommunityDetection:
     def run(self):
         train_dataset, val_dataset, test_dataset = self.prepare_data()
 
-        self.model = GCNNet(self.num_nodes, self.num_classes)
+        self.model = GCNNet(self.num_nodes, self.num_classes, self.dropout)
         self.model = self.model.to(
             'cuda' if torch.cuda.is_available() else 'cpu')
         self.optimizer = torch.optim.AdamW(
@@ -114,8 +117,8 @@ class GCNCommunityDetection:
 
         for epoch in range(self.epochs):
             loss = self.train(train_dataset)
-            self.loss_list.append(loss)
             accuracy = self.test(val_dataset)
+            self.loss_list.append(loss)
             self.accuracy_list.append(accuracy)
             print(
                 f'Epoch: {epoch}, Loss: {loss:.4f}, Accuracy on val_set: {accuracy:.4f}')
@@ -135,6 +138,8 @@ class GCNCommunityDetection:
         print(f"Accuracy on the test_set: {test_accuracy:.4f}")
         print(f"###################################\n")
 
+        return test_accuracy
+
     def plot_results(self):
         plt.plot(self.loss_list, label="Loss")
         plt.plot(self.accuracy_list, label="Accuracy")
@@ -151,24 +156,38 @@ class GCNCommunityDetection:
 
 if __name__ == '__main__':
     # Train the model, plot the results and save the model
-    num_nodes = 50
-    num_classes = 4
+    # ---------- Parameters ----------
+    num_nodes = 100
+    num_classes = 2
+    num_graphs = 1000
+    p = 0.6
+    q = 0.1
+    dropout = 0.3
+    epochs = 100
+    learning_rate = 0.0001
+    add_permutations = True
+    create_new_data = True
+    # ------------------------------
     gcn_cd = GCNCommunityDetection(
-        num_nodes=num_nodes, num_classes=num_classes, q=0.1, p=0.9, num_graphs=500, epochs=15,
-        add_permutations=True, learning_rate=0.001, create_new_data=False)
-    gcn_cd.run()
+        num_nodes=num_nodes, num_classes=num_classes, q=q, p=p, num_graphs=num_graphs,
+        learning_rate=learning_rate, epochs=epochs, add_permutations=add_permutations,
+        create_new_data=create_new_data, dropout=dropout)
+    test_accuracy = gcn_cd.run()
     gcn_cd.plot_results()
     gcn_cd.save_model()
+    with open("results.csv", "a") as f:
+        f.write(
+            f"{num_nodes},{num_classes},{q},{p},{num_graphs},{learning_rate},{epochs},{add_permutations},{dropout},{test_accuracy}\n")
 
     # Load the model, create graphs and predict the communities
-    model = GCNNet(num_nodes, num_classes)
+    model = GCNNet(num_nodes, num_classes, dropout)
     model.load_state_dict(torch.load("pt_gcn_model.pt"))
     model.eval()
 
     # 5 times for each q, p
     for _ in range(5):
-        data = create_dataset(num_nodes, num_classes,
-                              0.1, 0.9, 1, "pt_new_graph.pt")
+        data = create_dataset(num_nodes, num_classes, q,
+                              p, 1, "pt_new_graph.pt")
         data = load_dataset("pt_new_graph.pt")
         out = model(data[0])
         pred_labels = out.max(dim=1)[1]
@@ -190,7 +209,7 @@ if __name__ == '__main__':
     # 5 times for each different q, p
     for _ in range(5):
         data = create_dataset(num_nodes, num_classes,
-                              0.05, 0.6, 1, "pt_new_graph.pt")
+                              0.1, 0.9, 1, "pt_new_graph.pt")
         data = load_dataset("pt_new_graph.pt")
         out = model(data[0])
         pred_labels = out.max(dim=1)[1]
