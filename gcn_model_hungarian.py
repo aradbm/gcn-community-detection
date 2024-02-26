@@ -5,7 +5,7 @@ import torch
 import matplotlib.pyplot as plt
 from scipy.optimize import linear_sum_assignment
 from gcn_net import GCNNet
-from communities_dataset import create_dataset, load_dataset
+from communities_dataset import create_dataset, load_dataset, evaluate_spectral_clustering
 
 
 class GCNCommunityDetection:
@@ -32,26 +32,27 @@ class GCNCommunityDetection:
 
         # results lists
         self.loss_list = []
-        self.accuracy_list = []
+        self.train_accuracy_list = []
+        self.test_accuracy_list = []
 
     def prepare_data(self):
         num_train_graphs = int(0.8 * self.num_graphs)
-        num_val_graphs = int(0.1 * self.num_graphs)
-        num_test_graphs = self.num_graphs - num_train_graphs - num_val_graphs
+        num_test_graphs = self.num_graphs - num_train_graphs
         if self.create_new_data:
             create_dataset(
                 self.num_nodes, self.num_classes, self.q, self.p, num_train_graphs, "pt_train.pt", self.add_permutations)
-            create_dataset(
-                self.num_nodes, self.num_classes, self.q, self.p, num_val_graphs, "pt_val.pt")
+            # create_dataset(
+            #     self.num_nodes, self.num_classes, self.q, self.p, num_val_graphs, "pt_val.pt")
             create_dataset(
                 self.num_nodes, self.num_classes, self.q, self.p, num_test_graphs, "pt_test.pt")
         train_dataset = load_dataset("pt_train.pt")
-        val_dataset = load_dataset("pt_val.pt")
         test_dataset = load_dataset("pt_test.pt")
         print(f"Number of train graphs: {len(train_dataset)}")
-        print(f"Number of val graphs: {len(val_dataset)}")
         print(f"Number of test graphs: {len(test_dataset)}")
-        return train_dataset, val_dataset, test_dataset
+        # num_val_graphs = int(0.1 * self.num_graphs)
+        # val_dataset = load_dataset("pt_val.pt")
+        # print(f"Number of val graphs: {len(val_dataset)}")
+        return train_dataset, test_dataset
 
     def train(self, train_dataset):
         self.model.train()
@@ -107,7 +108,7 @@ class GCNCommunityDetection:
         return accuracy.item()
 
     def run(self):
-        train_dataset, val_dataset, test_dataset = self.prepare_data()
+        train_dataset, test_dataset = self.prepare_data()
 
         self.model = GCNNet(self.num_nodes, self.num_classes, self.dropout)
         self.model = self.model.to(
@@ -117,35 +118,51 @@ class GCNCommunityDetection:
 
         for epoch in range(self.epochs):
             loss = self.train(train_dataset)
-            accuracy = self.test(val_dataset)
-            self.loss_list.append(loss)
-            self.accuracy_list.append(accuracy)
-            print(
-                f'Epoch: {epoch}, Loss: {loss:.4f}, Accuracy on val_set: {accuracy:.4f}')
+            if epoch % 10 == 0:
+                train_accuracy = self.test(train_dataset)
+                test_accuracy = self.test(test_dataset)
+                self.loss_list.append(loss)
+                self.train_accuracy_list.append(train_accuracy)
+                self.test_accuracy_list.append(test_accuracy)
+                print(
+                    f'Epoch: {epoch}, Train Loss: {loss:.4f}, Train Accuracy: {train_accuracy:.4f}, Test Accuracy: {test_accuracy:.4f}')
 
-        test_accuracy = self.test(test_dataset)
+        test_accuracy = self.test_accuracy_list[-1]
+        train_accuracy = self.train_accuracy_list[-1]
+        spectral_accuracy = evaluate_spectral_clustering(
+            test_dataset, self.num_nodes, self.num_classes)
         # here we print a summary of the model
-        print(f"\n############# Summary #############")
+        print(
+            f"\n################################# Summary #################################")
         print(f"Number of nodes: {self.num_nodes}")
         print(f"Number of classes: {self.num_classes}")
         print(f"q: {self.q}")
         print(f"p: {self.p}")
         print(f"Number of graphs: {self.num_graphs}")
         print(f"Learning rate: {self.learning_rate}")
+        print(f"Dropout: {self.dropout}")
+        print(f"Add permutations: {self.add_permutations}")
         print(f"Epochs: {self.epochs}")
         print(
             f"Number of parameters: {sum(p.numel() for p in self.model.parameters())}")
-        print(f"Accuracy on the test_set: {test_accuracy:.4f}")
-        print(f"###################################\n")
+        print(f"Final test accuracy: {test_accuracy:.4f}")
+        print(f"Final train accuracy: {train_accuracy:.4f}")
+        print(
+            f"Spectral clustering accuracy on test set: {spectral_accuracy:.4f}")
+        print(
+            f"###########################################################################\n")
 
-        return test_accuracy
+        return test_accuracy, spectral_accuracy
 
     def plot_results(self):
         plt.plot(self.loss_list, label="Loss")
-        plt.plot(self.accuracy_list, label="Accuracy")
+        plt.plot(self.train_accuracy_list, label="Train Accuracy")
+        plt.plot(self.test_accuracy_list, label="Test Accuracy")
         plt.xlabel("Epoch")
         plt.ylabel("Metrics")
-        plt.title("Loss and Accuracy over Epochs")
+        plt.title("Loss, Train Accuracy and Test Accuracy")
+        #  the epochs are jumps of 10
+        plt.xticks(range(0, self.epochs, 10))
 
         plt.legend()
         plt.show()
@@ -155,15 +172,14 @@ class GCNCommunityDetection:
 
 
 if __name__ == '__main__':
-    # Train the model, plot the results and save the model
     # ---------- Parameters ----------
-    num_nodes = 100
-    num_classes = 2
-    num_graphs = 1000
-    p = 0.6
+    num_nodes = 200
+    num_classes = 3
+    num_graphs = 800
+    p = 0.9
     q = 0.1
     dropout = 0.3
-    epochs = 100
+    epochs = 200
     learning_rate = 0.0001
     add_permutations = True
     create_new_data = True
@@ -172,12 +188,12 @@ if __name__ == '__main__':
         num_nodes=num_nodes, num_classes=num_classes, q=q, p=p, num_graphs=num_graphs,
         learning_rate=learning_rate, epochs=epochs, add_permutations=add_permutations,
         create_new_data=create_new_data, dropout=dropout)
-    test_accuracy = gcn_cd.run()
+    test_accuracy, spectral_accuracy = gcn_cd.run()
     gcn_cd.plot_results()
     gcn_cd.save_model()
     with open("results.csv", "a") as f:
-        f.write(
-            f"{num_nodes},{num_classes},{q},{p},{num_graphs},{learning_rate},{epochs},{add_permutations},{dropout},{test_accuracy}\n")
+        f.write(f"{num_nodes},{num_classes},{q},{p},{num_graphs},{learning_rate},{epochs}," +
+                f"{add_permutations},{dropout},{test_accuracy:.8f},{spectral_accuracy:.8f}\n")
 
     # Load the model, create graphs and predict the communities
     model = GCNNet(num_nodes, num_classes, dropout)

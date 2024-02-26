@@ -23,12 +23,14 @@ create_dataset(num_nodes, num_classes, q, p, num_graphs, file_name) - creates a 
 load_dataset(file_name) - loads the dataset
 plot_graph(graph_data) - plots a graph from the dataset
 '''
-from itertools import permutations
 import torch
-import networkx as nx
 import numpy as np
+import networkx as nx
 import matplotlib.pyplot as plt
 from torch_geometric.data import Data
+from itertools import permutations
+from sklearn.cluster import SpectralClustering
+from scipy.optimize import linear_sum_assignment
 
 
 class CommunitiesDataset(torch.utils.data.Dataset):
@@ -131,18 +133,85 @@ def plot_graph(graph_data):
     plt.show()
 
 
-# if __name__ == '__main__':
-#     num_nodes = 20
-#     num_classes = 3
-#     q = 0.2
-#     p = 0.8
-#     base_graphs = 1000
+def spectral_clustering_accuracy(graph, num_nodes, n_classes):
+    '''
+    Perform spectral clustering on a single graph and compute the clustering accuracy.
 
-#     create_dataset(num_nodes, num_classes, q, p, base_graphs,
-#                    'pt_dataset.pt', include_permutations=True)
+    Parameters:
+    - graph: The graph to cluster.
+    - num_nodes: Number of nodes in the graph.
+    - n_classes: Number of classes (clusters) to divide the graph into.
+
+    Returns:
+    - acc: The accuracy of the spectral clustering for the graph.
+    - y_pred: The predicted labels from spectral clustering.
+    - y_true: The true labels of the nodes.
+    '''
+    edges = graph.edge_index.cpu().numpy()
+
+    # Convert to adjacency matrix
+    adj = np.zeros((num_nodes, num_nodes))
+    for i in range(edges.shape[1]):
+        adj[edges[0, i], edges[1, i]] = 1
+        adj[edges[1, i], edges[0, i]] = 1
+
+    # Spectral clustering
+    sc = SpectralClustering(n_clusters=n_classes, affinity='precomputed')
+    sc.fit(adj)
+
+    # Compute accuracy
+    y_pred = sc.labels_
+    y_true = graph.y.cpu().numpy()
+
+    cost = np.zeros((n_classes, n_classes))
+    for i in range(n_classes):
+        for j in range(n_classes):
+            cost[i, j] = np.sum(np.logical_and(y_pred == i, y_true == j))
+    row_ind, col_ind = linear_sum_assignment(-cost)
+    acc = cost[row_ind, col_ind].sum() / num_nodes
+
+    return acc, y_pred, y_true
+
+
+def evaluate_spectral_clustering(dataset, num_nodes, n_classes):
+    """
+    Evaluate the spectral clustering algorithm on multiple graphs.
+
+    Parameters:
+    - dataset: The dataset containing multiple graphs.
+    - num_nodes: Number of nodes in each graph.
+    - n_classes: Number of classes (clusters) for spectral clustering.
+
+    Returns:
+    - average_accuracy: The average accuracy of spectral clustering across all graphs in the dataset.
+    """
+    accuracies = []
+    for graph in dataset:
+        acc, _, _ = spectral_clustering_accuracy(graph, num_nodes, n_classes)
+        accuracies.append(acc)
+
+    average_accuracy = np.mean(accuracies)
+    return average_accuracy
+
+
+# if __name__ == '__main__':
+#     num_nodes = 200
+#     n_classes = 3
+#     q = 0.1
+#     p = 0.9
+#     base_graphs = 20
+
+#     create_dataset(num_nodes, n_classes, q, p, base_graphs,
+#                    'pt_dataset.pt', include_permutations=False)
 #     dataset = load_dataset('pt_dataset.pt')
-#     # graph = dataset[0]
-#     # plot_graph(graph)
-#     # graph = dataset[1]
-#     # plot_graph(graph)
-#     print(len(dataset))
+
+#     # Spectral Clustering
+#     graph = dataset[0]
+#     acc, y_pred, y_true = spectral_clustering_accuracy(
+#         graph, num_nodes, n_classes)
+#     print(f'Accuracy: {acc:.2f}')
+#     plot_graph(graph)
+
+#     # Evaluate Spectral Clustering
+#     avg_acc = evaluate_spectral_clustering(dataset, num_nodes, n_classes)
+#     print(f'Average Accuracy: {avg_acc:.2f} on {len(dataset)} graphs')
