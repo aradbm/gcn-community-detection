@@ -4,11 +4,11 @@ from torch_geometric.nn import GCNConv
 
 
 class GCNNet(torch.nn.Module):
-    def __init__(self, num_nodes, num_classes, dropout_rate=0.5):
+    def __init__(self, num_nodes, num_classes, dropout_rate=0.5, hidden_channels=36):
         super(GCNNet, self).__init__()
-        self.conv1 = GCNConv(num_nodes, 64)
-        self.conv2 = GCNConv(64, 64)
-        self.conv3 = GCNConv(64, num_classes)
+        self.conv1 = GCNConv(num_nodes, hidden_channels)
+        self.conv2 = GCNConv(hidden_channels, hidden_channels)
+        self.conv3 = GCNConv(hidden_channels, num_classes)
         self.dropout_rate = dropout_rate
 
     def forward(self, data):

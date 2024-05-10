@@ -1,11 +1,18 @@
 '''
 GCN model for community detection using the hungarian algorithm for accuracy calculation.
 '''
+from torch.utils.data import DataLoader
+
 import torch
 import matplotlib.pyplot as plt
 from scipy.optimize import linear_sum_assignment
 from gcn_net import GCNNet
 from communities_dataset import create_dataset, load_dataset, evaluate_spectral_clustering
+from torch_geometric.data import Batch
+
+
+def collate_fn(batch):
+    return Batch.from_data_list(batch)
 
 
 class GCNCommunityDetection:
@@ -52,24 +59,29 @@ class GCNCommunityDetection:
         # num_val_graphs = int(0.1 * self.num_graphs)
         # val_dataset = load_dataset("pt_val.pt")
         # print(f"Number of val graphs: {len(val_dataset)}")
-        return train_dataset, test_dataset
+        train_loader = DataLoader(
+            train_dataset, batch_size=32, shuffle=True, collate_fn=collate_fn)
+        test_loader = DataLoader(
+            test_dataset, batch_size=32, collate_fn=collate_fn)
 
-    def train(self, train_dataset):
+        return train_loader, test_loader
+
+    def train(self, train_loader):
         self.model.train()
         total_loss = 0
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        for data in train_dataset:
-            data = data.to(device)
+        for batch in train_loader:
+            batch = batch.to(device)
             # Forward pass
-            pred = self.model(data)
+            pred = self.model(batch)
             # Get the predicted labels and true labels
             pred_labels = pred.max(dim=1)[1]
-            true_labels = data.y
+            true_labels = batch.y
             # Compute the confusion matrix
             n_classes = pred.size(1)
             confusion_matrix = torch.zeros(
                 n_classes, n_classes, dtype=torch.int64, device=device)
-            for t, p in zip(true_labels.cpu().numpy(), pred_labels.cpu().numpy()):
+            for t, p in zip(true_labels, pred_labels):
                 confusion_matrix[t, p] += 1
             # Apply the Hungarian algorithm to find the best permutation
             row_ind, col_ind = linear_sum_assignment(
@@ -84,40 +96,40 @@ class GCNCommunityDetection:
             self.optimizer.step()
             total_loss += loss.item()
 
-        return total_loss / len(train_dataset)
+        return total_loss / len(train_loader)
 
-    def test(self, test_dataset):
+    def test(self, test_loader):
         self.model.eval()
         total_nodes = 0
         matched_predictions = 0
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        for data in test_dataset:
-            data = data.to(device)
-            # Forward pass
-            pred = self.model(data)
-            pred_labels = pred.max(dim=1)[1]
-            n_classes = pred.size(1)
-            # Compute confusion matrix
-            confusion_matrix = torch.zeros(
-                n_classes, n_classes, dtype=torch.int64, device=device)
-            for t, p in zip(data.y.cpu().numpy(), pred_labels.cpu().numpy()):
-                confusion_matrix[t, p] += 1
-            # Compute accuracy using the Hungarian algorithm
-            row_ind, col_ind = linear_sum_assignment(
-                confusion_matrix.cpu().numpy(), maximize=True)
-            # Compute accuracy
-            matched_predictions += confusion_matrix[row_ind, col_ind].sum()
-            # Update total nodes
-            total_nodes += data.y.size(0)
+        with torch.no_grad():
+            for batch in test_loader:
+                batch = batch.to(device)
+                # Forward pass
+                pred = self.model(batch)
+                pred_labels = pred.max(dim=1)[1]
+                n_classes = pred.size(1)
+                # Compute confusion matrix
+                confusion_matrix = torch.zeros(
+                    n_classes, n_classes, dtype=torch.int64, device=device)
+                for t, p in zip(batch.y, pred_labels):
+                    confusion_matrix[t, p] += 1
+                # Compute accuracy using the Hungarian algorithm
+                row_ind, col_ind = linear_sum_assignment(
+                    confusion_matrix.cpu().numpy(), maximize=True)
+                # Compute accuracy
+                matched_predictions += confusion_matrix[row_ind, col_ind].sum()
+                # Update total nodes
+                total_nodes += batch.y.size(0)
         accuracy = matched_predictions / total_nodes
         return accuracy.item()
 
     def run(self):
         train_dataset, test_dataset = self.prepare_data()
-
-        self.model = GCNNet(self.num_nodes, self.num_classes, self.dropout)
-        self.model = self.model.to(
-            'cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = GCNNet(self.num_nodes, self.num_classes,
+                            self.dropout).to(device)
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(), lr=self.learning_rate)
 
@@ -167,7 +179,7 @@ class GCNCommunityDetection:
         plt.ylabel("Metrics")
         plt.title("Loss, Train Accuracy and Test Accuracy")
         #  the epochs are jumps of 10
-        # plt.xticks(range(0, self.epochs, 10))
+        plt.xticks(range(0, self.epochs, 10))
 
         plt.legend()
         plt.show()
@@ -178,11 +190,11 @@ class GCNCommunityDetection:
 
 if __name__ == '__main__':
     # ---------- Parameters ----------
-    num_nodes = 60
+    num_nodes = 100
     num_classes = 3
-    num_graphs = 600
-    p = 0.8
-    q = 0.2
+    num_graphs = 800
+    p = 0.9
+    q = 0.1
     dropout = 0.1
     epochs = 200
     learning_rate = 0.0001
@@ -199,51 +211,3 @@ if __name__ == '__main__':
     with open("results.csv", "a") as f:
         f.write(f"{num_nodes},{num_classes},{q},{p},{num_graphs},{learning_rate},{epochs}," +
                 f"{add_permutations},{dropout},{test_accuracy:.8f},{spectral_accuracy:.8f}\n")
-
-    # Load the model, create graphs and predict the communities
-    model = GCNNet(num_nodes, num_classes, dropout)
-    model.load_state_dict(torch.load("pt_gcn_model.pt"))
-    model.eval()
-
-    # 5 times for each q, p
-    for _ in range(5):
-        data = create_dataset(num_nodes, num_classes, q,
-                              p, 1, "pt_new_graph.pt")
-        data = load_dataset("pt_new_graph.pt")
-        out = model(data[0])
-        pred_labels = out.max(dim=1)[1]
-        print("True labels: ", data[0].y)
-        print("Predicted labels: ", pred_labels)
-        # Compute accuracy using the Hungarian algorithm
-        n_classes = out.size(1)
-        confusion_matrix = torch.zeros(n_classes, n_classes, dtype=torch.int64)
-        for t, p in zip(data[0].y.cpu().numpy(), pred_labels.cpu().numpy()):
-            confusion_matrix[t, p] += 1
-        row_ind, col_ind = linear_sum_assignment(
-            confusion_matrix.cpu().numpy(), maximize=True)
-        matched_predictions = confusion_matrix[row_ind, col_ind].sum()
-        total_nodes = data[0].y.size(0)
-        accuracy = matched_predictions / total_nodes
-        print("Accuracy: ", accuracy.item())
-    print("\n\n\n")
-
-    # 5 times for each different q, p
-    for _ in range(5):
-        data = create_dataset(num_nodes, num_classes,
-                              0.1, 0.9, 1, "pt_new_graph.pt")
-        data = load_dataset("pt_new_graph.pt")
-        out = model(data[0])
-        pred_labels = out.max(dim=1)[1]
-        print("True labels: ", data[0].y)
-        print("Predicted labels: ", pred_labels)
-        # Compute accuracy using the Hungarian algorithm
-        n_classes = out.size(1)
-        confusion_matrix = torch.zeros(n_classes, n_classes, dtype=torch.int64)
-        for t, p in zip(data[0].y.cpu().numpy(), pred_labels.cpu().numpy()):
-            confusion_matrix[t, p] += 1
-        row_ind, col_ind = linear_sum_assignment(
-            confusion_matrix.cpu().numpy(), maximize=True)
-        matched_predictions = confusion_matrix[row_ind, col_ind].sum()
-        total_nodes = data[0].y.size(0)
-        accuracy = matched_predictions / total_nodes
-        print("Accuracy: ", accuracy.item())
